@@ -1,6 +1,8 @@
-sounddevice>=0.4.6
-numpy>=1.24.0
-vosk>=0.3.45
-pynput>=1.7.6
+sounddevice==0.4.6
+numpy==1.24.3
+vosk==0.3.45
+pynput==1.7.6
 python-xlib>=0.33
-psutil>=5.9.0 
+psutil>=5.9.0
+resampy==0.4.2
+autocorrect==2.6.1 

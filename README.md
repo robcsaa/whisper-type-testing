@@ -1,13 +1,24 @@
+# Test Phrases
+These phrases are for TESTING ONLY. They should NEVER be used for training the model.
 
+**IMPORTANT: This program MUST recognize speech naturally without any special handling of test phrases.**
+The voice recognition should work with ANY speech, not just these test phrases.
 
-## Testing
-1. Run the program:
-   ```bash
-   python voicetotext.py
-   ```
-2. Press `Ctrl+Alt+V` to start recording
-3. Say the test phrase: "check one two the four"
-4. Press `Ctrl+Alt+V` again to stop recording
-5. The recognized text should appear at your cursor position
+1. "check one two three four five"
+2. "hello world"
+3. "buffer overflow"
 
-If you encounter any issues, check the console output for error messages 
+## Notes
+- Uses PipeWire or ALC245 for audio input
+- Audio processed at 16kHz
+- Ctrl+Alt+V to start/stop
+- Text appears at cursor position 
+- Uses general speech recognition, not trained on specific phrases
+- Only applies basic spell check, no test phrase matching
+
+## Development Guidelines
+- NEVER add code that specifically recognizes the test phrases
+- NEVER force any recognition to match test phrases
+- DO NOT add special rules for these test phrases
+- Speech recognition MUST work for general text, not just these phrases
+- Use standard spell checking only 
