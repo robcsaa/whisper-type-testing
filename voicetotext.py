@@ -2,7 +2,6 @@
 import os
 import sys
 import json
-import wave
 import queue
 import threading
 import signal
@@ -10,7 +9,7 @@ import sounddevice as sd
 import numpy as np
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
-from vosk import Model, KaldiRecognizer
+import whisper
 import time
 from pathlib import Path
 import resampy
@@ -19,38 +18,48 @@ class VoiceToText:
     def __init__(self):
         self.recording = False
         self.keyboard_controller = Controller()
-        self.model_path = Path.home() / '.vosk' / 'model' / 'vosk-model-en-us-0.22'
         self.current_keys = set()
         self.running = True
         self.audio_data = []
-        self.target_samplerate = 16000  # Vosk expects 16kHz
+        self.target_samplerate = 16000  # Whisper also expects 16kHz
         self.current_samplerate = None  # Will be set when recording starts
         self.resample_buffer = []  # Buffer for resampling
         self.last_recognized_text = ""  # Track last recognized text
+        self.model_size = "base.en"  # Whisper model size
+        self.debug_level = 1  # 0=minimal, 1=normal, 2=verbose
         self.setup_model()
         
-    def setup_model(self):
-        """Download and setup the Vosk model if not present"""
-        if not self.model_path.exists():
-            print("Downloading Vosk model...")
-            # TODO: Implement model download
-            print("Please download the model manually from https://alphacephei.com/vosk/models")
-            print("and extract it to ~/.vosk/model/vosk-model-en-us-0.22")
-            sys.exit(1)
+    def debug_print(self, message, level=1):
+        """Print debug messages based on debug level"""
+        if level <= self.debug_level:
+            print(message)
         
-        self.model = Model(str(self.model_path))
-        self.recognizer = KaldiRecognizer(self.model, self.target_samplerate)
+    def setup_model(self):
+        """Setup the Whisper model"""
+        self.debug_print(f"Loading Whisper model: {self.model_size}", 0)
+        try:
+            self.model = whisper.load_model(self.model_size)
+            self.debug_print("Whisper model loaded successfully", 0)
+        except Exception as e:
+            self.debug_print(f"Error loading Whisper model: {e}", 0)
+            sys.exit(1)
 
     def audio_callback(self, indata, frames, time, status):
         """Callback for audio recording"""
         if status:
-            print(f"Audio status: {status}")
+            self.debug_print(f"Audio status: {status}", 2)
         
         # Get raw audio data
         audio_data = indata.flatten()
         
+        # Show audio statistics at debug level 2
+        if self.debug_level >= 2:
+            self.debug_print(f"Raw input shape: {indata.shape}, mean: {np.mean(audio_data):.6f}, min: {np.min(audio_data):.6f}, max: {np.max(audio_data):.6f}", 2)
+        
         # Skip processing if the audio is too quiet
-        if np.max(np.abs(audio_data)) < 0.0001:
+        if np.max(np.abs(audio_data)) < 0.0005:  # Lower threshold to capture more audio
+            if self.debug_level >= 2:
+                self.debug_print("Audio too quiet, skipping", 2)
             return
         
         # Add to resample buffer
@@ -65,26 +74,18 @@ class VoiceToText:
                 # Resample to 16kHz
                 resampled_data = resampy.resample(buffer_data, self.current_samplerate, self.target_samplerate)
                 
-                # Convert to 16-bit PCM
-                audio_int16 = (resampled_data * 32767).astype(np.int16)
-                
-                # Store the audio data for final processing
-                audio_bytes = audio_int16.tobytes()
-                self.audio_data.append(audio_bytes)
-                
-                # Process audio if we're recording
-                if self.recording:
-                    self.recognizer.AcceptWaveform(audio_bytes)
+                # Store the audio data for final processing (as float32 for Whisper)
+                self.audio_data.append(resampled_data)
                 
                 # Clear buffer
                 self.resample_buffer = []
             except Exception as e:
-                print(f"Error processing audio chunk: {e}")
+                self.debug_print(f"Error processing audio chunk: {e}", 0)
                 self.resample_buffer = []
 
     def record_audio(self):
         """Record audio from microphone"""
-        print("\n=== Starting Audio Recording ===")
+        self.debug_print("\n=== Starting Audio Recording ===", 0)
         try:
             # Find the microphone device
             devices = sd.query_devices()
@@ -94,7 +95,7 @@ class VoiceToText:
             for i, device in enumerate(devices):
                 if 'pipewire' in str(device['name']).lower():
                     mic_device = i
-                    print(f"Found PipeWire device: {device['name']}")
+                    self.debug_print(f"Found PipeWire device: {device['name']}", 1)
                     break
             
             # If no PipeWire device, try ALC245
@@ -102,7 +103,7 @@ class VoiceToText:
                 for i, device in enumerate(devices):
                     if 'ALC245' in str(device['name']):
                         mic_device = i
-                        print(f"Found ALC245 device: {device['name']}")
+                        self.debug_print(f"Found ALC245 device: {device['name']}", 1)
                         break
             
             # If still not found, use default input device
@@ -110,19 +111,19 @@ class VoiceToText:
                 for i, device in enumerate(devices):
                     if device['max_input_channels'] > 0:
                         mic_device = i
-                        print(f"Using default input device: {device['name']}")
+                        self.debug_print(f"Using default input device: {device['name']}", 1)
                         break
             
             if mic_device is None:
-                print("Error: No input device found")
+                self.debug_print("Error: No input device found", 0)
                 return
             
             device_info = sd.query_devices(mic_device)
-            print(f"\nUsing input device: {device_info['name']} (ID: {mic_device})")
+            self.debug_print(f"\nUsing input device: {device_info['name']} (ID: {mic_device})", 1)
             
             # Get device's native sample rate
             self.current_samplerate = int(device_info['default_samplerate'])
-            print(f"Device sample rate: {self.current_samplerate} Hz")
+            self.debug_print(f"Device sample rate: {self.current_samplerate} Hz", 1)
             
             # Configure audio stream with explicit device
             with sd.InputStream(device=mic_device,
@@ -130,13 +131,13 @@ class VoiceToText:
                               channels=1,
                               dtype='float32',
                               callback=self.audio_callback,
-                              blocksize=4096) as stream:
-                print("\nAudio stream opened successfully")
-                print("Waiting for audio data...")
+                              blocksize=1024) as stream:  # Smaller blocksize for better responsiveness
+                self.debug_print("\nAudio stream opened successfully", 1)
+                self.debug_print("Waiting for audio data...", 1)
                 while self.recording and self.running:
                     time.sleep(0.1)
         except Exception as e:
-            print(f"Error in audio recording: {e}")
+            self.debug_print(f"Error in audio recording: {e}", 0)
             import traceback
             traceback.print_exc()
 
@@ -144,13 +145,11 @@ class VoiceToText:
         """Toggle recording state"""
         self.recording = not self.recording
         if self.recording:
-            print("Recording started...")
+            self.debug_print("Recording started...", 0)
             self.audio_data = []  # Clear previous audio data
-            # Reset recognizer for new recording
-            self.recognizer = KaldiRecognizer(self.model, self.target_samplerate)
             threading.Thread(target=self.record_audio).start()
         else:
-            print("Recording stopped, processing...")
+            self.debug_print("Recording stopped, processing...", 0)
             
             # Process any remaining audio in the buffer
             if self.resample_buffer:
@@ -158,49 +157,51 @@ class VoiceToText:
                     audio_data = np.concatenate(self.resample_buffer)
                     if self.current_samplerate != self.target_samplerate:
                         audio_data = resampy.resample(audio_data, self.current_samplerate, self.target_samplerate)
-                    audio_data = (audio_data * 32767).astype(np.int16)
-                    self.audio_data.append(audio_data.tobytes())
+                    self.audio_data.append(audio_data)
                     self.resample_buffer = []
                 except Exception as e:
-                    print(f"Error processing final buffer: {e}")
+                    self.debug_print(f"Error processing final buffer: {e}", 0)
             
             # Get final result
             try:
-                # Create a new recognizer for final processing
-                final_recognizer = KaldiRecognizer(self.model, self.target_samplerate)
-                
                 if self.audio_data:
                     # Combine all audio for best recognition
-                    combined_audio = b"".join(self.audio_data)
+                    combined_audio = np.concatenate(self.audio_data)
                     
-                    # Process the combined audio
-                    final_recognizer.AcceptWaveform(combined_audio)
-                    final_result = json.loads(final_recognizer.FinalResult())
+                    # Normalize audio to correct range for Whisper
+                    # Whisper expects audio in the range [-1, 1]
+                    self.debug_print(f"Processing audio with shape: {combined_audio.shape}", 2)
                     
-                    if final_result.get("text", "").strip():
-                        text = final_result["text"]
-                        print(f"Final recognized text: {text}")
+                    # Process with Whisper
+                    self.debug_print("Transcribing with Whisper...", 1)
+                    result = self.model.transcribe(combined_audio, language="en")
+                    
+                    if result["text"].strip():
+                        text = result["text"].strip()
+                        self.debug_print(f"Final recognized text: {text}", 0)
                         self.insert_text(text)
                     else:
-                        print("No text recognized")
+                        self.debug_print("No text recognized", 0)
                 else:
-                    print("No audio data collected")
+                    self.debug_print("No audio data collected", 0)
             except Exception as e:
-                print(f"Error getting final result: {e}")
+                self.debug_print(f"Error transcribing with Whisper: {e}", 0)
+                import traceback
+                traceback.print_exc()
             
-            print("Done!")
+            self.debug_print("Done!", 0)
 
     def insert_text(self, text):
         """Insert text at current cursor position"""
         if text.strip():
-            print(f"Inserting text: {text}")
+            self.debug_print(f"Inserting text: {text}", 1)
             try:
                 self.keyboard_controller.type(text)
-                print("Text inserted successfully")
+                self.debug_print("Text inserted successfully", 1)
             except Exception as e:
-                print(f"Error inserting text: {e}")
+                self.debug_print(f"Error inserting text: {e}", 0)
         else:
-            print("No text to insert")
+            self.debug_print("No text to insert", 1)
 
     def on_press(self, key):
         """Handle key press events"""
@@ -211,7 +212,9 @@ class VoiceToText:
             if (Key.ctrl_l in self.current_keys or Key.ctrl_r in self.current_keys) and \
                (Key.alt_l in self.current_keys or Key.alt_r in self.current_keys) and \
                (hasattr(key, 'char') and key.char == 'v'):
-                print("Hotkey detected: Ctrl+Alt+V")
+                self.debug_print("Hotkey detected: Ctrl+Alt+V", 1)
+                # Remove the keys to prevent double triggering
+                self.current_keys.clear()
                 self.toggle_recording()
         except AttributeError:
             pass
@@ -225,11 +228,11 @@ class VoiceToText:
 
     def cleanup(self):
         """Cleanup resources"""
-        print("\nCleaning up...")
+        self.debug_print("\nCleaning up...", 1)
         self.running = False
         self.recording = False
         time.sleep(0.1)  # Give threads time to finish
-        print("Cleanup complete")
+        self.debug_print("Cleanup complete", 1)
 
 def main():
     # Set the audio backend configuration
@@ -250,22 +253,25 @@ def main():
         on_release=vtt.on_release)
     listener.start()
     
-    # Register signal handler
-    def signal_handler(signum, frame):
+    print("Voice to Text ready!")
+    print("Press Ctrl+Alt+V to start/stop recording")
+    
+    # Setup signal handler for clean exit
+    def signal_handler(sig, frame):
         print("\nExiting...")
         vtt.cleanup()
+        listener.stop()
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
     
-    print("Voice to Text is running. Press Ctrl+Alt+V to start/stop recording.")
-    print("Press Ctrl+C to exit.")
-    
+    # Keep the program running
     try:
-        while True:
+        while vtt.running:
             time.sleep(0.1)
     except KeyboardInterrupt:
         vtt.cleanup()
+        listener.stop()
 
 if __name__ == "__main__":
     main() 
