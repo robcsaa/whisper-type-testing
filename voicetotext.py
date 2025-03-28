@@ -25,8 +25,12 @@ class VoiceToText:
         self.current_samplerate = None  # Will be set when recording starts
         self.resample_buffer = []  # Buffer for resampling
         self.last_recognized_text = ""  # Track last recognized text
-        self.model_size = "base.en"  # Whisper model size
+        self.model_size = "tiny.en"  # Smaller model, may work better for a single speaker
         self.debug_level = 1  # 0=minimal, 1=normal, 2=verbose
+        self.save_recordings = False  # Set to True to save audio recordings for training
+        self.recordings_dir = Path("voice_samples")  # Directory to save recordings
+        if self.save_recordings:
+            self.recordings_dir.mkdir(exist_ok=True)
         self.setup_model()
         
     def debug_print(self, message, level=1):
@@ -168,6 +172,10 @@ class VoiceToText:
                     # Combine all audio for best recognition
                     combined_audio = np.concatenate(self.audio_data)
                     
+                    # Save audio if enabled
+                    if self.save_recordings:
+                        self.save_audio(combined_audio)
+                    
                     # Normalize audio to correct range for Whisper
                     # Whisper expects audio in the range [-1, 1]
                     self.debug_print(f"Processing audio with shape: {combined_audio.shape}", 2)
@@ -190,6 +198,17 @@ class VoiceToText:
                 traceback.print_exc()
             
             self.debug_print("Done!", 0)
+            
+    def save_audio(self, audio_data):
+        """Save audio data to a file for training purposes"""
+        try:
+            import soundfile as sf
+            timestamp = int(time.time())
+            filename = self.recordings_dir / f"recording_{timestamp}.wav"
+            sf.write(filename, audio_data, self.target_samplerate)
+            self.debug_print(f"Saved audio to {filename}", 1)
+        except Exception as e:
+            self.debug_print(f"Error saving audio: {e}", 0)
 
     def insert_text(self, text):
         """Insert text at current cursor position"""
