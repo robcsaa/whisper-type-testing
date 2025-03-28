@@ -1,0 +1,14 @@
+{
+    "system_info": {
+        "cpu_cores": 16,
+        "total_memory_gb": 14.96,
+        "available_memory_gb": 6.54,
+        "gpu_info": "NVIDIA GeForce RTX 3060 Laptop GPU, 6144 MiB, 15 MiB"
+    },
+    "model_recommendation": {
+        "recommended_model": "vosk-model-en-us-0.22",
+        "reason": "Your RTX 3060 Mobile GPU has sufficient VRAM to handle the larger model, which provides better accuracy.",
+        "model_size": "1.8GB",
+        "download_url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip"
+    }
+}
